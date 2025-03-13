@@ -23,22 +23,15 @@ import torch.distributed as dist
 import random
 
 # LOCAL
-import config
 import sampling
-import arch_utils
 import processes
 import utils
-import nll
 import optimizers
 import ema
 import logging_utils
 import time_samplers
-import augmentations 
-# LOCAL
-import utils
 import prediction
-
-# TODO saving
+import unet
 
 class ProcessedBatch:
 
@@ -64,14 +57,14 @@ class DiffusionTrainer:
         self.test_loader = test_loader
         self.setup_overfit()
 
-        self.process = processes.get_process(config)
+        self.process = processes.get_process(config, device)
         self.setup_networks()
         print("---------------------")
         for k in vars(self.config):
             print(k, getattr(self.config, k))
         print("---------------------")
 
-        self.train_time_sampler = time_samplers.get_train_time_sampler(config)
+        self.train_time_sampler = time_samplers.get_train_time_sampler(config, device)
 
         if self.is_main() and self.config.use_wandb:
             logging_utils.setup_wandb_needs_blocking(
@@ -96,15 +89,20 @@ class DiffusionTrainer:
         dist.barrier()
 
     def setup_overfit(self,):
+        '''
+        save one batch to be a special overfitting batch for debugging
+        '''
         x, label = next(iter(self.train_loader))
         x, label = x.to(self.device), label.to(self.device)
         self.overfit_batch = (x, label)
 
     def setup_networks(self,):
-       
+        '''
+        Set up neural networks and handle parallelism
+        '''
         config = self.config
         
-        self.network = arch_utils.Velocity(config)
+        self.network = unet.get_unet_from_config(config)
         self.network_ema = deepcopy(self.network)
 
         self.optimizer = optimizers.setup_optimizer(self.network, config)
@@ -136,7 +134,7 @@ class DiffusionTrainer:
         config = self.config
         start_batch = time.time()
         logging_dict = {}
-        loss, mean_time = self.loss_fn(batch) 
+        loss = self.loss_fn(batch) 
         logging_dict['train_loss'] = loss
         old_norm, old_lr, new_lr = optimizers.step_optimizer(
             self.network, 
@@ -146,8 +144,7 @@ class DiffusionTrainer:
             self.step
         )
         end_batch = time.time()
-        logging_dict['train_loss'] = logging['train_loss'].item()
-        logging_dict['mean_time'] = mean_time
+        logging_dict['train_loss'] = logging_dict['train_loss'].item()
         logging_dict['grad_norm_before_clip'] = old_norm.item()
 
         self.total_time += (end_batch - start_batch)
@@ -194,25 +191,22 @@ class DiffusionTrainer:
 
     @torch.no_grad()
     def definitely_sample(self, logging_dict, use_ema):
-            self.process.eval()
-            for ode in ([False, True] if self.config.sample_with_ode else [False]):
-                logging_dict = sampling.sample(
-                    apply_fn = self.apply_fn_eval,
-                    config = self.config,
-                    process = self.process,
-                    use_ema = use_ema,
-                    loader = self.train_loader, 
-                    device = self.device, 
-                    ode = ode,
-                    logging_dict = logging_dict,
-                )
-        self.barrier()
+        for ode in ([False, True]):
+            logging_dict = sampling.sample(
+                apply_fn = self.apply_fn_eval,
+                config = self.config,
+                process = self.process,
+                use_ema = use_ema,
+                loader = self.train_loader, 
+                device = self.device, 
+                ode = ode,
+                logging_dict = logging_dict,
+            )
         return logging_dict
 
     def maybe_sample(self, logging_dict = None):
 
         config = self.config
-
         if logging_dict is None:
             logging_dict = {}
         
@@ -225,17 +219,28 @@ class DiffusionTrainer:
             return logging_dict
  
     def maybe_log(self, logD):
-        is_time = self.step % self.config.log_every == 0
-        if is_time:
+        if self.step % self.config.log_every == 0:
             if self.is_main():
                 logD['steps_per_sec'] = round(self.log_steps / self.total_time, 3)
                 for i, pgroup in enumerate(self.optimizer.param_groups):
                     logD[f'lr_{i}'] = pgroup['lr']
-                logging_utils.def_log(logD, self.step, use_wandb = self.config.use_wandb)
+                logging_utils.definitely_log(logD, self.step, use_wandb = self.config.use_wandb)
                 self.log_steps = 0
                 self.total_time = 0.
             self.barrier()
 
+
+    def apply_fn(self, xt, t, label, use_ema = False, is_train = False):
+        network = self.network_ema if use_ema else self.network
+        network.train() if is_train else network.eval()
+        return network(xt, t, label)
+
+    def apply_fn_train(self, xt, t, label):
+        return self.apply_fn(xt, t, label, use_ema = False, is_train = True)
+
+    def apply_fn_eval(self, xt, t, label, use_ema):
+        return self.apply_fn(xt, t, label, use_ema=use_ema, is_train=False)
+    
     def prepare_batch_fn(self, batch):
        
         config = self.config
@@ -250,12 +255,14 @@ class DiffusionTrainer:
             x_original = x_original.to(device)
             label = label.to(device)
 
-        x_discrete = utils.x01_to_centered(x_discrete)
-        
-        x_discrete_aug, augmentation_label = self.augmenter(x_discrete)
+        # for images, move from [0,1] to [-1,1] , but still discrete
+        x_discrete = utils.x01_to_centered(x_original)
 
-        x0 = nll.sample_q_x0_given_x_discrete(x_discrete, config)
-        x0_aug = nll.sample_q_x0_given_x_discrete(x_discrete_aug, config)
+        # dequantization to make continuous
+        x0 = torch.distributions.Normal(
+            loc = x_discrete, 
+            scale = config.gamma.type_as(x_discrete)
+        ).sample()
 
         return ProcessedBatch(
             x_original = x_original,
@@ -265,48 +272,28 @@ class DiffusionTrainer:
         )
 
     def loss_fn(self, batch):
-        self.process.train()
         processed_batch = self.prepare_batch_fn(batch)
-        N = processed_batch.x0.shape[0]
-        t = self.train_time_sampler(N, self.process, self.device)
-        processed_batch.store_time(t.detach())
-        apply_fn lambda xt, t, label: self.apply_fn_train(xt, t, label),
-        x_discrete = processed_batch.x_discrete_aug
+        batch_size = processed_batch.x0.shape[0]
+        t = self.train_time_sampler(batch_size)
+        apply_fn = lambda xt, t, label: self.apply_fn_train(xt, t, label)
         x0 = processed_batch.x0
         label = processed_batch.label
-        N = x0.shape[0]
-        t = processed_batch.t
         coefs_t = self.process(t)
-        x1 = torch.randn_like(x0)
-        xt = compute_xt(x0, x1, coefs_t)
+        x1 = self.process.sample_base(batch_size)
+        xt = self.process.compute_xt(x0, x1, coefs_t)
+        
         model_convert_fn = prediction.get_model_out_to_pred_obj_fn(model_type = self.config.model_type)
         model_out = apply_fn(xt, t, label)
         model_obj = model_convert_fn(t=t, xt=xt, model_out=model_out, coefs=coefs_t)   
+        
         target_fn = prediction.get_target_fn()
         target_obj = target_fn(t=t, xt=xt, x0=x0, x1=x1, coefs=coefs_t)
-        if self.config.target_type == self.config.model_type:
-            assert torch.allclose(
-                getattr(model_obj, self.config.target_type),
-                model_out,
-            )
-        err = image_sq_err(
+        
+        sq_err = utils.image_square_error(
             getattr(model_obj, self.config.target_type),
             getattr(target_obj, self.config.target_type),
         )
-        assert err.shape == (N,)
-        loss = err.mean()
+        assert sq_err.shape == (batch_size,)
+        loss = sq_err.mean()
         return loss        
-
-    def apply_fn_train(self, xt, t, label):
-        return self.apply_fn(xt, t, label, use_ema = False, is_train = True)
-
-    def apply_fn_eval(self, xt, t, label, use_ema):
-        if use_ema:
-            assert False, 'dont use for now'
-        return self.apply_fn(xt, t, label, use_ema=use_ema, is_train=False)
-
-    def apply_fn(self, xt, t, label, use_ema = False, is_train = False):
-        network = self.network_ema if use_ema else self.network
-        network.train() if is_train else network.eval()
-        return network(xt, t, label)
 

@@ -12,9 +12,7 @@ from data_utils import setup_data_train_and_test
 from config import Config
 
 def cleanup():
-    
     dist.destroy_process_group()
-
 
 def setup_device(config):
 
@@ -26,18 +24,10 @@ def setup_device(config):
         rank = 0
         device = torch.device('cpu')
         local_seed = config.global_seed
-        if config.evaluate:
-            config.local_batch_size = config.global_batch_size_evaluate
-        else:
-            config.local_batch_size = config.global_batch_size_train
+        config.local_batch_size = config.global_batch_size_train
         return config, rank, local_seed, device
 
-    #assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-
-    if config.evaluate:
-        global_bsz = config.global_batch_size_evaluate
-    else:
-        global_bsz = config.global_batch_size_train
+    global_bsz = config.global_batch_size_train
 
     if config.cpu:
         assert False, 'should have returned earlier'
@@ -75,23 +65,22 @@ def setup_device(config):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='hello')
-    parser.add_argument('--evaluate', type = int, default = 0)
     parser.add_argument('--use_wandb', type = int, default = 1)
     parser.add_argument('--dataset', type = str, default = 'cifar')
     parser.add_argument('--process_name', type=str, choices=['linear_vp','rf_tied','rf_const','cosine','learned_tied'], default='rf_tied')
-    parser.add_argument('--time_sampler', type=str, choices=['none','importance_sample','logit_normal'], default='none')
-    parser.add_argument('--base_ckpt_dir', type=str, default='/gpfs/scratch/goldsm20/ckpts_learn')
+    parser.add_argument('--time_sampler', type=str, choices=['unif','logit_normal'], default='unif')
     parser.add_argument('--debug', type=int, default=0)
-    parser.add_argument('--where', type=str, default='local') # local or purple
-    parser.add_argument('--loss_type', type=str, default='hybrid')
 
     # ask someone about these at some point
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
     torch.set_float32_matmul_precision('high')
 
-    args = parser.parse_args()
-    
+
+    # ARGS are the command line args
+    # CONFIG is an object with many more things in it that comes from config.py
+
+    args = parser.parse_args()    
     config = Config(args)
     
     # DEVICE DDP STUFF
@@ -103,7 +92,11 @@ if __name__ == '__main__':
     if config.cpu:
         args.base_ckpt_dir = '~/'
 
-    base_ckpt_dir = args.base_ckpt_dir
+    
+    # TODO add model saving to courant diffusion demo
+    # but for now, still define the checkpointing dir
+
+    base_ckpt_dir = './ckpts/'
 
     if config.debug:
         base_ckpt_dir += '_debug'
@@ -112,8 +105,6 @@ if __name__ == '__main__':
         base_ckpt_dir, jobname
     )
 
-    print("WILL BE WRITING CKPTS IN ",ckpt_dir)
-    
     config.ckpt_dir = ckpt_dir
     
     pth = pathlib.Path(ckpt_dir)
@@ -124,7 +115,6 @@ if __name__ == '__main__':
         config = config,
         rank = rank,
         local_seed = local_seed,
-        augment = False # handle augment manually
     )
 
     trainer = DiffusionTrainer(
@@ -137,11 +127,7 @@ if __name__ == '__main__':
         test_loader = test_loader,
     )
     
-    if config.evaluate:
-        trainer.evaluate()
-        print("finished evaluation")
-    else:
-        trainer.train_loop()
-        print("finished training.")
+    trainer.train_loop()
+    print("finished training.")
 
     cleanup()

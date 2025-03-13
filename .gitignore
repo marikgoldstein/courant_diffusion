@@ -1,0 +1,6 @@
+**/logs/*
+**/data/*
+**/__pycache__/*
+**/ckpts/*
+**/ckpts_induction/*
+**/ckpts_debug/*

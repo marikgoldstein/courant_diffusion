@@ -1,18 +1,11 @@
 import os, sys
 import math
 import torch
-#from transformers import pipeline
 from torch.nn import CrossEntropyLoss
 import torch
 from torch.utils.data.dataloader import DataLoader
 from torch.optim import AdamW
-#from accelerate import Accelerator
-#from accelerate.utils import ProjectConfiguration  
-#from transformers import get_scheduler
 from tqdm.notebook import tqdm
-#from huggingface_hub import Repository, get_full_repo_name
-#from transformers import get_linear_schedule_with_warmup, set_seed
-#from transformers import get_cosine_schedule_with_warmup
 import numpy as np
 import torch
 import torch.nn as nn
@@ -27,6 +20,10 @@ import utils
 from logging_utils import wandb_fn
 import prediction
 
+
+def bad(x):
+    return torch.any(torch.isnan(x)) or torch.any(torch.isinf(x))
+
 def elementwise(a, x):
     return utils.bcast_right(a, x.ndim).type_as(x) * x
 
@@ -38,55 +35,39 @@ def sample(
     use_ema,
     loader = None, 
     device = None, 
-    ret_D = None,
+    logging_dict = None,
     ode = False,
 ):
     
     print("doing sampling with ode == ", ode)
 
-    assert not use_ema
-    assert not ode
-
-    if ret_D is None:
-        ret_D = {}
+    if logging_dict is None:
+        logging_dict = {}
 
     N = config.batch_size_sample
 
-    D = {}
-    D['label'] = torch.randint(0, config.num_classes, (N,))
-    D['x1'] = torch.randn(N, config.C, config.H, config.W)
+    label = torch.randint(0, config.num_classes, (N,)).to(device)
+    x1 = process.sample_base(N).to(device)
 
-    if device is not None:
-        D['label'] = D['label'].to(device)
-        D['x1'] = D['x1'].to(device)
-
-
-    apply_fn_curried = lambda xt, t: apply_fn(xt, t, D['label'], use_ema = use_ema)
-
+    apply_fn_curried = lambda xt, t: apply_fn(xt, t, label, use_ema = use_ema)
 
     samp = EM(
         apply_fn = apply_fn_curried,
         config = config,
         process = process,
-        base = D['x1'],
+        base = x1,
         ode = ode,
     )
 
-    if 'x0' in D:
-        right = D['x0']
-        k = 'base_sample_real' 
-    else:
-        right = None
-        k = 'base_sample'
-    k += ('_ode' if ode else '')
-    k += ('_ema' if use_ema else '')
-    ret_D[k] = wandb_fn(
+    key = 'base_sample'
+    key += ('_ode' if ode else '')
+    key += ('_ema' if use_ema else '')
+    logging_dict[key] = wandb_fn(
         samp, 
-        left = D['x1'],
-        right = right,
-        gray = False
+        left = x1,
+        gray = (config.dataset == 'mnist')
     )
-    return ret_D
+    return logging_dict
 
 
 def get_ode_step_fn(config, process, apply_fn, step_size):
@@ -100,6 +81,8 @@ def get_ode_step_fn(config, process, apply_fn, step_size):
         with torch.set_grad_enabled(True):
             coefs = process(rev_t)
         model_out = apply_fn(xt, rev_t)
+        
+
         model_obj = model_convert_fn(rev_t, xt, model_out, coefs)
         vel = getattr(model_obj, 'velocity')
         xt -= dt * vel
@@ -107,9 +90,6 @@ def get_ode_step_fn(config, process, apply_fn, step_size):
         return xt, mu
     
     return step_fn
-
-def bad(x):
-    return torch.any(torch.isnan(x)) or torch.any(torch.isinf(x))
 
 def get_sde_step_fn(config, process, apply_fn, step_size):
 
@@ -119,36 +99,24 @@ def get_sde_step_fn(config, process, apply_fn, step_size):
 
     def step_fn(xt, t):
         
-
         rev_t = 1 - t
-
-        
+ 
         with torch.set_grad_enabled(True):
             coefs = process(rev_t)
         
         model_out = apply_fn(xt, rev_t)
+
         model_obj = model_convert_fn(rev_t, xt, model_out, coefs)
-        score = getattr(model_obj, 'score')
-        g = torch.sqrt(2.0 * coefs.delta_t)
-        g2 = g.pow(2)
-        g2s = elementwise(g2, score)
-        f = elementwise(coefs.a_dot / coefs.a_t, xt)
-        z = torch.randn_like(xt)    
+       
+        v = model_obj.velocity
+        s = model_obj.score
+        delta = utils.bcast_right(coefs.delta_t , s.ndim)
+        
+        drift = v - delta * s
+        mu =  xt + drift * dt
+        z = torch.randn_like(xt)
 
-        if bad(g):
-            print("g is bad")
-            print("rev t is",  rev_t)
-            print("delta is", coefs.delta_t)
-            assert False, 'g is bad'
-        if bad(model_out):
-            assert False, 'model out is bad'
-        if bad(score):
-            assert False, 'score is bad'
-        if bad(f):
-            assert False, 'f is bad'
-
-        mu =  xt + (g2s-f) * dt
-        xt = mu + dt.sqrt() * elementwise(g, z)
+        xt = mu + dt.sqrt() * elementwise((2.0 * delta).sqrt(), z)
         return xt, mu
 
     return step_fn
@@ -167,6 +135,7 @@ def EM(apply_fn, config, process, base, ode=False):
     step_size = ts[1] - ts[0]
     xt = base
     ones = torch.ones(base.shape[0]).type_as(xt)
+
 
     if ode:
         step_fn = get_ode_step_fn(config, process, apply_fn, step_size)

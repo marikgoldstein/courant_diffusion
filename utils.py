@@ -95,18 +95,6 @@ def x01_to_centered(x):
     x = x255_to_centered(x)
     return x
 
-def cleanup():
-    """
-    End DDP training.
-    """
-    dist.destroy_process_group()
-
-class Batch:
-    def __init__(self, x_discrete, x0, conditioning):
-        self.x_discrete = x_discrete
-        self.x0 = x0
-        self.conditioning = conditioning
-
 def bcast_right(value, ndim):
     if len(value.shape) > ndim:
         assert False
@@ -115,19 +103,3 @@ def bcast_right(value, ndim):
         return value.reshape(value.shape + difference * (1,))
     else:
         return value
-
-def imshow(batch):
-    num_images = batch.shape[0]
-    nrows = int(math.sqrt(num_images))
-    ncols = int(math.sqrt(num_images))
-    images = batch[: num_images]
-    images = np.reshape(images, (-1, *images.shape[1:]))
-    print("images", images.shape)
-    _, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(10,10))
-    for i, ax in enumerate(axes.flat):
-        image = (jnp.array(images[i]) + 1.0) / 2.0
-        ax.imshow(image)
-        ax.axis('off')
-    plt.show()
-    plt.clf()
-

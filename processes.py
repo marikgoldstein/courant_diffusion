@@ -1,24 +1,22 @@
 import torch
 import torch.nn as nn
 import numpy as np
-# local
 
-def get_process(config):
+# local
+import utils
+
+def get_process(config, device):
 
     pt = config.process_name
 
     if pt == 'cosine':
-        process = CosineScheduleProcess(config)
-    elif pt == 'special':
-        process = SpecialProcess(config)
+        process = CosineScheduleProcess(config, device)
     elif pt == 'rf_tied':
-        process = RFScheduleProcessTiedDelta(config)
+        process = RFScheduleProcessTiedDelta(config, device)
     elif pt == 'rf_const':
-        process = RFScheduleProcessConstDelta(config)
+        process = RFScheduleProcessConstDelta(config, device)
     elif pt == 'linear_vp':
-        process = LinearVP(config)
-    elif pt == 'learned_tied':
-        process = LearnedTiedProcess(config)
+        process = LinearVP(config, device)
     else:
         assert False
     return process
@@ -33,10 +31,11 @@ class Coefs:
 
 class GaussianProcess:
 
-    def __init__(self, config):
+    def __init__(self, config, device):
         self.config = config
+        self.device = device
 
-    def forward(self, t):
+    def __call__(self, t):
         a_t = self.alpha(t)
         s_t = self.sigma(t)
         a_dot = self.alpha_dot(t)
@@ -53,17 +52,14 @@ class GaussianProcess:
             delta_t = delta_t
         )
 
-    @property
-    def max_log_snr(self):
-        return self.config.max_log_snr
+    def sample_base(self, batch_size):
+        config = self.config
+        return torch.randn(batch_size, config.C, config.H, config.W).to(self.device)
 
-    @property
-    def final_time(self):
-        return 1.0
-
-    @property
-    def final_std(self,):
-        return self.sigma(torch.tensor(self.final_time))
+    def compute_xt(self, x0, x1, coefs):                
+        left = utils.bcast_right(coefs.a_t, x0.ndim) * x0
+        right = utils.bcast_right(coefs.s_t, x1.ndim) * x1
+        return left + right
 
     def alpha(self, t):
         raise NotImplementedError()
@@ -86,37 +82,12 @@ class GaussianProcess:
     def delta(self ,t):
         raise NotImplementedError()
 
-    def log_snr(self, t):
-        return torch.log(
-            self.alpha(t).pow(2) / self.sigma(t).pow(2)
-        ).squeeze(-1).squeeze(-1).squeeze(-1)
-
-    def inverse_log_snr(self, lam):
-        raise NotImplementedError()
-
-    def minimum_time(self,):
-        max_lam = torch.tensor(self.max_log_snr)
-        min_time = self.inverse_log_snr(max_lam)
-        assert min_time >= 0.0
-        assert min_time <= 1.0
-        return min_time.item()
-
-    def ratio_alpha(self, s, t):
-        return self.alpha(t) / self.alpha(s) #? 
-
-    def ratio_sigma(self, s, t):
-        return self.sigma(s) / self.sigma(t) #? 
-
-    def ratio(self, i, j, s, t): # ? 
-        ratio_alpha_i = torch.pow(self.ratio_alpha(s,t), i)
-        ratio_sigma_j = torch.pow(self.ratio_sigma(s,t), j)
-        return ratio_alpha_i * ratio_sigma_j
 
 class CosineScheduleProcess(GaussianProcess):
 
  
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, device):
+        super().__init__(config, device)
 
     def alpha(self, t):
         return torch.cos(0.5 * np.pi * t)
@@ -140,13 +111,10 @@ class CosineScheduleProcess(GaussianProcess):
     def delta(self, t):
         return self.g(t).pow(2) / 2.0
 
-    def inverse_log_snr(self, lam):
-        return (2/np.pi) * torch.atan(torch.exp(-lam/2))
-
 class RFScheduleProcess(GaussianProcess):
 
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, device):
+        super().__init__(config, device)
 
     def alpha(self, t):
         return 1 - t
@@ -169,9 +137,6 @@ class RFScheduleProcess(GaussianProcess):
     def g(self, time):
         return torch.sqrt(2.0 * self.delta(time))
 
-    def inverse_log_snr(self, lam):
-        return (-lam / 2).sigmoid()
-
 class RFScheduleProcessTiedDelta(RFScheduleProcess):
 
     def delta(self, t):
@@ -185,8 +150,8 @@ class RFScheduleProcessConstDelta(RFScheduleProcess):
 
 class LinearVP(GaussianProcess):
 
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, device):
+        super().__init__(config, device)
         self.beta_min = config.beta_min
         self.beta_max = config.beta_max
 
@@ -204,14 +169,6 @@ class LinearVP(GaussianProcess):
         return (
             -self.alpha_dot(time) * self.alpha(time) / self.sigma(time)
         )
-    
-    def inverse_log_snr(self, lam):
-        z = self.beta_min**2 + 2.0 * (self.beta_max - self.beta_min) * np.log(1 + np.exp(-lam))
-        numer = -1.0 * self.beta_min + np.sqrt(z)
-        denom = self.beta_max - self.beta_min
-        out = numer / denom
-        assert len(out.shape) <= 1
-        return out
 
     def f(self, time):
         raise NotImplementedError()
