@@ -10,11 +10,9 @@ def get_process(config, device):
     pt = config.process_name
 
     if pt == 'cosine':
-        process = CosineScheduleProcess(config, device)
-    elif pt == 'rf_tied':
-        process = RFScheduleProcessTiedDelta(config, device)
-    elif pt == 'rf_const':
-        process = RFScheduleProcessConstDelta(config, device)
+        process = CosineVP(config, device)
+    elif pt == 'rf':
+        process = RectifiedFlow(config, device)
     elif pt == 'linear_vp':
         process = LinearVP(config, device)
     else:
@@ -22,12 +20,14 @@ def get_process(config, device):
     return process
 
 class Coefs:
-    def __init__(self, a_t, s_t, a_dot, s_dot, delta_t):
-        self.a_t = a_t
-        self.s_t = s_t
-        self.a_dot = a_dot
-        self.s_dot = s_dot
-        self.delta_t = delta_t
+    def __init__(self, alpha, sigma, alpha_dot, sigma_dot, delta, g, g_squared):
+        self.alpha = alpha
+        self.sigma = sigma
+        self.alpha_dot = alpha_dot
+        self.sigma_dot = sigma_dot
+        self.delta = delta
+        self.g = g
+        self.g_squared = g_squared
 
 class GaussianProcess:
 
@@ -36,20 +36,14 @@ class GaussianProcess:
         self.device = device
 
     def __call__(self, t):
-        a_t = self.alpha(t)
-        s_t = self.sigma(t)
-        a_dot = self.alpha_dot(t)
-        s_dot = self.sigma_dot(t)
-        delta_t = self.delta(t)
-        assert torch.all(
-            delta_t >= 0.0
-        )
         return Coefs(
-            a_t = a_t, 
-            s_t = s_t, 
-            a_dot = a_dot,
-            s_dot = s_dot, 
-            delta_t = delta_t
+            alpha = self.alpha(t),
+            sigma = self.sigma(t),
+            alpha_dot = self.alpha_dot(t),
+            sigma_dot = self.sigma_dot(t),
+            delta = self.delta(t),
+            g = self.g(t),
+            g_squared = self.g_squared(t),
         )
 
     def sample_base(self, batch_size):
@@ -57,8 +51,8 @@ class GaussianProcess:
         return torch.randn(batch_size, config.C, config.H, config.W).to(self.device)
 
     def compute_xt(self, x0, x1, coefs):                
-        left = utils.bcast_right(coefs.a_t, x0.ndim) * x0
-        right = utils.bcast_right(coefs.s_t, x1.ndim) * x1
+        left = utils.bcast_right(coefs.alpha, x0.ndim) * x0
+        right = utils.bcast_right(coefs.sigma, x1.ndim) * x1
         return left + right
 
     def alpha(self, t):
@@ -79,12 +73,14 @@ class GaussianProcess:
     def g(self, t):
         raise NotImplementedError()
 
+    def g_squared(self, t):
+        return 2.0 * self.delta(t)
+
     def delta(self ,t):
         raise NotImplementedError()
 
 
-class CosineScheduleProcess(GaussianProcess):
-
+class CosineVP(GaussianProcess):
  
     def __init__(self, config, device):
         super().__init__(config, device)
@@ -111,7 +107,7 @@ class CosineScheduleProcess(GaussianProcess):
     def delta(self, t):
         return self.g(t).pow(2) / 2.0
 
-class RFScheduleProcess(GaussianProcess):
+class RectifiedFlow(GaussianProcess):
 
     def __init__(self, config, device):
         super().__init__(config, device)
@@ -125,28 +121,19 @@ class RFScheduleProcess(GaussianProcess):
     def alpha_dot(self, t):
         return -1.0 * torch.ones_like(t)
 
-    def sigma_dot(self, time):
-        return torch.ones_like(time)
-
-    def delta(self, time):
-        raise NotImplementedError()
-
-    def f(self, time):
-        raise NotImplementedError()
-
-    def g(self, time):
-        return torch.sqrt(2.0 * self.delta(time))
-
-class RFScheduleProcessTiedDelta(RFScheduleProcess):
+    def sigma_dot(self, t):
+        return torch.ones_like(t)
 
     def delta(self, t):
-        t = t.clamp(min=0.0, max=.9999)
-        return t / (1-t)
+        left = self.sigma(t) * self.sigma_dot(t)
+        right = (self.alpha_dot(t) / self.alpha(t)) * self.sigma(t).pow(2)
+        return left - right
+        
+    def f(self, t):
+        raise NotImplementedError()
 
-class RFScheduleProcessConstDelta(RFScheduleProcess):
-   
-    def delta(self, time):
-        return torch.ones_like(time) * self.config.delta_const
+    def g(self, t):
+        return torch.sqrt(2.0 * self.delta(t))
 
 class LinearVP(GaussianProcess):
 
@@ -155,29 +142,26 @@ class LinearVP(GaussianProcess):
         self.beta_min = config.beta_min
         self.beta_max = config.beta_max
 
-    def alpha(self, time):
-        return torch.exp(-0.5 * (self.beta_min * time + 0.5 * time**2 * (self.beta_max - self.beta_min)))
+    def alpha(self, t):
+        return torch.exp(-0.5 * (self.beta_min * t + 0.5 * t**2 * (self.beta_max - self.beta_min)))
 
-    def sigma(self, time):
-        return torch.sqrt(1 -  self.alpha(time)**2)
+    def sigma(self, t):
+        return torch.sqrt(1 -  self.alpha(t)**2)
 
-    def alpha_dot(self, time):
-        r = -0.5 * (time * (self.beta_max - self.beta_min) + self.beta_min)
-        return self.alpha(time) * r
+    def alpha_dot(self, t):
+        r = -0.5 * (t * (self.beta_max - self.beta_min) + self.beta_min)
+        return self.alpha(t) * r
 
-    def sigma_dot(self, time):
+    def sigma_dot(self, t):
         return (
-            -self.alpha_dot(time) * self.alpha(time) / self.sigma(time)
+            -self.alpha_dot(t) * self.alpha(t) / self.sigma(t)
         )
 
-    def f(self, time):
-        raise NotImplementedError()
-        #return -0.5 * (self.beta_min + torch.tensor(time) * (self.beta_max - self.beta_min))
+    def f(self, t):
+        return -0.5 * (self.beta_min + torch.tensor(t) * (self.beta_max - self.beta_min))
     
-    def g(self, time):
-        return torch.sqrt(self.beta_min + time * (self.beta_max - self.beta_min))
+    def g(self, t):
+        return torch.sqrt(self.beta_min + t * (self.beta_max - self.beta_min))
 
-    def delta(self, time):
-        return self.g(time).pow(2) / 2.0
-
-
+    def delta(self, t):
+        return self.g(t).pow(2) / 2.0

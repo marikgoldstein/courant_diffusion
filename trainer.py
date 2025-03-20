@@ -36,9 +36,17 @@ import unet
 class ProcessedBatch:
 
     def __init__(self, x_original, x_discrete, x0, label):
+        
+        # image discrete in [0, 1] taking 256 values
         self.x_original = x_original
+       
+        # preprocessed (e.g. possibly centered) in [-1,1] but still discrete
         self.x_discrete = x_discrete
+
+        # continuous e.g. drawn from N(x_discrete, gamma^2 I) for small gamma like 0.001
         self.x0 = x0
+
+        # image label
         self.label = label
 
 class DiffusionTrainer:
@@ -56,7 +64,6 @@ class DiffusionTrainer:
         self.train_sampler = train_sampler
         self.test_loader = test_loader
         self.setup_overfit()
-
         self.process = processes.get_process(config, device)
         self.setup_networks()
         print("---------------------")
@@ -66,6 +73,12 @@ class DiffusionTrainer:
 
         self.train_time_sampler = time_samplers.get_train_time_sampler(config, device)
 
+        # This is a function that converts your model output to all possible prediction types
+        self.model_convert_fn = prediction.get_model_out_to_pred_obj_fn(
+            model_type = self.config.model_type
+        )
+
+        # setup logging and wandb
         if self.is_main() and self.config.use_wandb:
             logging_utils.setup_wandb_needs_blocking(
                 self.config, 
@@ -182,6 +195,11 @@ class DiffusionTrainer:
             self.do_step(batch, epoch_num)
 
     def train_loop(self,):
+        '''
+        Train loop is many epochs
+        Epoch is many steps
+        each step does train and some periodic logging/eval
+        '''
         self.log_steps = 0
         self.total_time = 0.0
         epoch_num = 0
@@ -210,7 +228,7 @@ class DiffusionTrainer:
         if logging_dict is None:
             logging_dict = {}
         
-        for use_ema in [False]: #, True]:
+        for use_ema in [False, True]:
             timer = config.sample_ema_every if use_ema else config.sample_every
             if self.step % timer == 0 and self.step >= config.sample_after:
                 if self.is_main():
@@ -272,27 +290,42 @@ class DiffusionTrainer:
         )
 
     def loss_fn(self, batch):
+        '''
+        This is just a squared error function
+        but it looks complicated because it handles generic case
+        of parameterizing one object but computing squared error on another
+        e.g. your model approximates E[x0|xt] but you want to compute
+        velocity squared error or score squared error
+        Usually your model output and desired target type match,
+        but gradients can be different for differnet parameterizations.
+        '''
         processed_batch = self.prepare_batch_fn(batch)
         batch_size = processed_batch.x0.shape[0]
         t = self.train_time_sampler(batch_size)
         apply_fn = lambda xt, t, label: self.apply_fn_train(xt, t, label)
         x0 = processed_batch.x0
         label = processed_batch.label
-        coefs_t = self.process(t)
+        coefs = self.process(t)
         x1 = self.process.sample_base(batch_size)
-        xt = self.process.compute_xt(x0, x1, coefs_t)
+        xt = self.process.compute_xt(x0, x1, coefs)
         
-        model_convert_fn = prediction.get_model_out_to_pred_obj_fn(model_type = self.config.model_type)
+        # This is whatever your model approximates
         model_out = apply_fn(xt, t, label)
-        model_obj = model_convert_fn(t=t, xt=xt, model_out=model_out, coefs=coefs_t)   
-        
+
+        # This an object containing all possible prediction tpyes
+        model_obj = self.model_convert_fn(t=t, xt=xt, model_out=model_out, coefs=coefs)   
+
+        # This is your estimate of the target (a conversion of whatever your model outputted)
+        model_pred = getattr(model_obj, self.config.target_type)
+
+        # get an object with all possible targets (score target, noise target, velocity target)
         target_fn = prediction.get_target_fn()
-        target_obj = target_fn(t=t, xt=xt, x0=x0, x1=x1, coefs=coefs_t)
+        target_obj = target_fn(t=t, xt=xt, x0=x0, x1=x1, coefs=coefs)
+        target = getattr(target_obj, self.config.target_type)
         
-        sq_err = utils.image_square_error(
-            getattr(model_obj, self.config.target_type),
-            getattr(target_obj, self.config.target_type),
-        )
+        # the acutal squared loss
+        sq_err = utils.image_square_error(model_pred, target)
+
         assert sq_err.shape == (batch_size,)
         loss = sq_err.mean()
         return loss        

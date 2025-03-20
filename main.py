@@ -16,9 +16,10 @@ def cleanup():
 
 def setup_device(config):
 
-    # dont save any rank specific things in config so that restoring doesnt make everything
-    # think it has the same rank
 
+    # dont save any rank specific things in 
+    # config so that restoring doesnt make everything
+    # think it has the same rank
     if not config.use_ddp:
         config.world_size = 1
         rank = 0
@@ -30,7 +31,6 @@ def setup_device(config):
     global_bsz = config.global_batch_size_train
 
     if config.cpu:
-        assert False, 'should have returned earlier'
         backend = 'gloo'
     else:
         backend = 'nccl'
@@ -67,7 +67,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='hello')
     parser.add_argument('--use_wandb', type = int, default = 1)
     parser.add_argument('--dataset', type = str, default = 'cifar')
-    parser.add_argument('--process_name', type=str, choices=['linear_vp','rf_tied','rf_const','cosine','learned_tied'], default='rf_tied')
+    parser.add_argument('--process_name', type=str, choices=['linear_vp','rf', 'cosine'])
     parser.add_argument('--time_sampler', type=str, choices=['unif','logit_normal'], default='unif')
     parser.add_argument('--debug', type=int, default=0)
 
@@ -75,7 +75,6 @@ if __name__ == '__main__':
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
     torch.set_float32_matmul_precision('high')
-
 
     # ARGS are the command line args
     # CONFIG is an object with many more things in it that comes from config.py
@@ -92,9 +91,7 @@ if __name__ == '__main__':
     if config.cpu:
         args.base_ckpt_dir = '~/'
 
-    
-    # TODO add model saving to courant diffusion demo
-    # but for now, still define the checkpointing dir
+    # TODO add model saving 
 
     base_ckpt_dir = './ckpts/'
 

@@ -75,7 +75,7 @@ def setup_data(
                 shuffle = True,
             )
 
-        dl = DataLoader(
+        dataloader = DataLoader(
             ds,
             batch_size=config.local_batch_size,
             sampler= sampler,
@@ -84,7 +84,7 @@ def setup_data(
             pin_memory=True,
             drop_last=True                                                                                                                                                                                          
         )
-        return dl, sampler
+        return dataloader, sampler
 
     else:
  

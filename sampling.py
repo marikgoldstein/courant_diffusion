@@ -20,7 +20,6 @@ import utils
 from logging_utils import wandb_fn
 import prediction
 
-
 def bad(x):
     return torch.any(torch.isnan(x)) or torch.any(torch.isinf(x))
 
@@ -60,7 +59,7 @@ def sample(
     )
 
     key = 'base_sample'
-    key += ('_ode' if ode else '')
+    key += ('_ode' if ode else '_sde')
     key += ('_ema' if use_ema else '')
     logging_dict[key] = wandb_fn(
         samp, 
@@ -81,8 +80,6 @@ def get_ode_step_fn(config, process, apply_fn, step_size):
         with torch.set_grad_enabled(True):
             coefs = process(rev_t)
         model_out = apply_fn(xt, rev_t)
-        
-
         model_obj = model_convert_fn(rev_t, xt, model_out, coefs)
         vel = getattr(model_obj, 'velocity')
         xt -= dt * vel
@@ -108,14 +105,12 @@ def get_sde_step_fn(config, process, apply_fn, step_size):
 
         model_obj = model_convert_fn(rev_t, xt, model_out, coefs)
        
-        v = model_obj.velocity
-        s = model_obj.score
-        delta = utils.bcast_right(coefs.delta_t , s.ndim)
-        
-        drift = v - delta * s
-        mu =  xt + drift * dt
+        velocity = model_obj.velocity
+        score = model_obj.score
+        delta = utils.bcast_right(coefs.delta , score.ndim)
+        drift = velocity - delta * score
+        mu =  xt - drift * dt
         z = torch.randn_like(xt)
-
         xt = mu + dt.sqrt() * elementwise((2.0 * delta).sqrt(), z)
         return xt, mu
 
@@ -135,7 +130,6 @@ def EM(apply_fn, config, process, base, ode=False):
     step_size = ts[1] - ts[0]
     xt = base
     ones = torch.ones(base.shape[0]).type_as(xt)
-
 
     if ode:
         step_fn = get_ode_step_fn(config, process, apply_fn, step_size)

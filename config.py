@@ -1,4 +1,4 @@
-# local
+# local files
 import torch
 import data_utils
 import os
@@ -9,13 +9,18 @@ import numpy as np
 class Config:
     def __init__(self, args):
 
-        self.cpu = False
+        self.small_model = False
         self.use_ddp = True
+        self.cpu = False
         self.model_type = 'velocity'
         self.target_type = 'velocity'
         self.debug = bool(args.debug)
-        
-
+       
+        # LIGHTNING just means run everything quickly
+        # (sample often, etc) just to make sure everything runs
+        # NOTE very important to be mindful of warmup steps.
+        # If warmup steps is set large, then LR is basically 0.0 for a while
+        # and you will see nothing work in quick debugging experiments.
         LIGHTNING = self.debug
         self.dataset = args.dataset
         self.global_batch_size_train = 128 if LIGHTNING else 256 
@@ -90,14 +95,22 @@ class Config:
 
         self.num_classes_for_model = self.num_classes
         self.data_dim = self.C * self.H * self.W
-     
-       	self.unet_use_classes = True
-        self.unet_channels = 128
-        self.unet_dim_mults = (1, 2, 2, 2)
-        self.unet_resnet_block_groups = 8
-        self.unet_learned_sinusoidal_dim = 32
-        self.unet_attn_dim_head = 64
-        self.unet_attn_heads = 4
+
+        self.unet_use_classes = True
+        if self.small_model:
+            self.unet_channels = 32
+            self.unet_dim_mults = (1, 2)
+            self.unet_resnet_block_groups = 2
+            self.unet_learned_sinusoidal_dim = 4
+            self.unet_attn_dim_head = 32
+            self.unet_attn_heads = 1
+        else:
+            self.unet_channels = 128
+            self.unet_dim_mults = (1, 2, 2, 2)
+            self.unet_resnet_block_groups = 8
+            self.unet_learned_sinusoidal_dim = 32
+            self.unet_attn_dim_head = 64
+            self.unet_attn_heads = 4
         self.unet_learned_sinusoidal_cond = True
         self.unet_random_fourier_features = False
 
