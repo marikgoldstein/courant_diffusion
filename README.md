@@ -1,3 +1,10 @@
+
+# quick instructions
+To run this code, go to config.py, set the options you want, go to run.sh, set the options you want, and then call "sh run.sh". 
+
+
+# more info
+
 This is some code written by Mark. 
 
 Main point of repo is to help Courant + Courant adjacent people start small projects.
