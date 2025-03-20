@@ -1,4 +1,8 @@
-# COPIED FROM THE AMAZING LUCIDRAINS https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/guided_diffusion.py
+# Copied from lucidrains
+# https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/guided_diffusion.py
+# NOTE: this is a good example architecture, but is *much* lighter than
+# what is used for "good" image results
+
 
 import math
 import copy
