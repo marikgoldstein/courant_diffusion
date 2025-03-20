@@ -10,5 +10,6 @@ Finally, this code is still not "light" since it does provide some stuff like mu
 
 I imagine that the way you might use this code is to make your own copy in a new repo rather than fork it and submit changes. Meanwhile I'll update it some more in the near future. Once the code settles, feel free to submit pull requests. Until then maybe just let me know any suggestions in person or ask me to give you pull/push access.
 
+To run this code, go to config.py, set the options you want, go to run.sh, set the options you want, and then call "sh run.sh". 
 
 
