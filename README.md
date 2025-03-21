@@ -7,22 +7,11 @@ To run this code, go to config.py, set the options you want, go to run.sh, set t
 
 This is some code written by Mark. 
 
-Main point of repo is to help Courant + Courant adjacent people start small projects.
+Main point of repo is to help Courant people start small projects.
 
 The code captures many small details / tips from collaborators (Valentin de Bortoli, Michael Albergo, Nick Boffi, etc)
 
-
-Finally, this code is still not "light" since it does provide some stuff like multi GPU. If there's interest in a Much Lighter code base with far fewer options, I can put that together.
-
-I imagine that the way you might use this code is to make your own copy in a new repo rather than fork it and submit changes. Meanwhile I'll update it some more in the near future. Once the code settles, feel free to submit pull requests. Until then maybe just let me know any suggestions in person or ask me to give you pull/push access.
-
-Main TODOs:
-- add example of non cifar dataset
-- maybe make sure code works for feature vector type data and not just image data. Requires adding another architecture.
-
 Files:
-
-I prefer "flat" python directories that you dont need to setup/install rather than nested ones, so I try to keep few files total. 
 
 - **README.md**: 
     - this file
