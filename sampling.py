@@ -71,6 +71,12 @@ def sample(
 
 def get_ode_step_fn(config, process, apply_fn, step_size):
 
+    '''
+    x1 is base distribution, want to sample x0
+    starting at x1, we integrate velocity backwards in an ODE
+    this is the same as integrating dx = -v(x,1-t)dt in forward time
+    (note both negation and 1-t)
+    '''
     model_convert_fn = prediction.get_model_out_to_pred_obj_fn(model_type = config.model_type)
 
     dt = step_size
@@ -82,13 +88,54 @@ def get_ode_step_fn(config, process, apply_fn, step_size):
         model_out = apply_fn(xt, rev_t)
         model_obj = model_convert_fn(rev_t, xt, model_out, coefs)
         vel = getattr(model_obj, 'velocity')
-        xt -= dt * vel
+        xt = xt - dt * vel
         mu = xt
         return xt, mu
     
     return step_fn
 
 def get_sde_step_fn(config, process, apply_fn, step_size):
+
+    '''
+    here we integrate the SDE going from x1 to x0
+    In diffusion terminology, the SDE we would integrate in backward time is 
+    dx = [f(x,t) - g^2(t)score(x, t) ]dt + g(t)dWt 
+    
+    In forward time we would do dx = (g^2(1-t)score(x,1-t) - f(x,1-t))dt + g(1-t)dWt
+
+
+    In interpolant terminology, the SDE we would integrate in backward time is 
+
+    dx = (velocity(x,t) - delta(t) * score(x,t)) dt + root(2 delta(t))dWt 
+       = f_reverse(x,t) dt + root(2 delta(t)) dWt
+
+    For some delta(t) >= 0
+
+    These views are equivalent, where f = velocity + delta * score and 
+    g = root(2 delta)
+    
+    It's just that for score based diffusion, f is assumed known and tractable
+
+
+    Instead, for interpolant view, we may not know f even if we approximate the score, 
+    but we acquire f by applying some conversions that hold between true velocities and scores 
+    to our model.
+
+    Let's stick with interpolant view. 
+    
+    Define f_forward(x,t) = velocity(x,t) + delta(t) * score(x,t)
+    Define f_reverse(x,t) = velocity(x,t) - delta(t) * score(x,t)
+
+    Going back to the SDE, 
+    we need to integrate dx = f_reverse(x,t) dt + root(2 delta(t))dWt in reverse time
+    To integrate in forward time , we thus integrate
+
+    dx = -f_reverse(x, 1-t) dt + root(2 delta(1-t))dWt 
+       = -[velocity(x, 1-t) - delta(1-t)score(x, 1-t)]dt + root(2delta(1-t)dWt
+
+    In practice, our model outputs one of score or velocity, and we convert to get the other
+
+    '''
 
     model_convert_fn = prediction.get_model_out_to_pred_obj_fn(model_type = config.model_type)
     

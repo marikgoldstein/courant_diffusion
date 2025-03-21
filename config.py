@@ -9,9 +9,19 @@ import numpy as np
 class Config:
     def __init__(self, args):
 
-        self.small_model = False
-        self.use_ddp = True
-        self.cpu = False
+        CPU_TEST = False
+
+        if CPU_TEST:
+            self.small_model = True
+            self.use_ddp = False
+            self.cpu = True
+        
+        else:
+            # usual case, use gpu
+            self.small_model = False
+            self.use_ddp = True
+            self.cpu = False
+
         self.model_type = 'velocity'
         self.target_type = 'velocity'
         self.debug = bool(args.debug)
@@ -27,10 +37,17 @@ class Config:
         self.overfit = self.debug
         self.EM_sample_steps = 500 if LIGHTNING else 500 
         self.freq = 100 if LIGHTNING else 25_000
-        self.save_every = 10_000 if LIGHTNING else self.freq
+
+        # saves a ckpt named at current step like model_step_2000.pt
+        # can't set this too frequent since models take up a lot of space
+        self.save_every = 1000 if LIGHTNING else self.freq
+        # saves a ckpt named something like model_last.pt. 
+        # Can set this frequent since it keeps overwriting.
         self.save_last_every = 1000
         self.sample_every = 1000 if LIGHTNING else self.freq
-        self.sample_ema_every = self.freq
+        self.sample_ema_every = self.sample_every
+        # only bother to monitor EMA samples if not debuging
+        self.sample_with_ema = not self.debug
         self.sample_with_ode = False if LIGHTNING else True
         self.warmup_steps = 100 if LIGHTNING else 20_000
 
@@ -66,7 +83,6 @@ class Config:
         # std_dev of dequantized q(x0_continuous|x_discrete)
         self.gamma = torch.tensor(0.001)
 
-        self.sample_with_ema = not self.overfit
         self.ema_decay = .9998
         self.update_ema_every = 1
         self.update_ema_after = 20000

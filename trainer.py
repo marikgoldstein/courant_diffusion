@@ -32,6 +32,7 @@ import logging_utils
 import time_samplers
 import prediction
 import unet
+import saving
 
 class ProcessedBatch:
 
@@ -66,6 +67,7 @@ class DiffusionTrainer:
         self.setup_overfit()
         self.process = processes.get_process(config, device)
         self.setup_networks()
+        self.def_save(name = 'init')
         print("---------------------")
         for k in vars(self.config):
             print(k, getattr(self.config, k))
@@ -121,7 +123,24 @@ class DiffusionTrainer:
         self.optimizer = optimizers.setup_optimizer(self.network, config)
 
         self.step = 0
-        self.has_updated_ema = False
+        
+        restored = saving.maybe_restore(
+            config = config,
+            network = self.network,
+            network_ema = self.network_ema,
+            optimizer = self.optimizer,
+            process = self.process,
+            process_optimizer = self.process_optimizer,
+            device = self.device
+        )
+
+        # do not wipe ema from ckpt if restoring
+        if restored:
+            self.has_updated_ema = True
+        else:
+            self.has_updated_ema = False
+
+
         ema.requires_grad(self.network_ema, False)
         self.network_ema.eval()
 
@@ -138,6 +157,8 @@ class DiffusionTrainer:
             net = self.network.module
         else:
             net = self.network
+
+        # set ema to initialize as model
         ema.wipe_ema(net, self.network_ema)
 
     def do_step(self, batch, epoch_num):
@@ -162,7 +183,10 @@ class DiffusionTrainer:
 
         self.total_time += (end_batch - start_batch)
         self.log_steps += 1
+       
         
+        # if first update of EMA, sets EMA to equal the current model
+        # else, does an exponential moving average update
         updated_ema = ema.maybe_update_emas(
             self.network, 
             self.network_ema, 
@@ -172,7 +196,16 @@ class DiffusionTrainer:
         )
         if updated_ema and (not self.has_updated_ema):
             self.has_updated_ema = True
-            
+    
+        saving.maybe_save(
+            network = self.network,
+            network_ema = self.network_ema,
+            optimizer = self.optimizer,
+            config = config,
+            step = self.step,
+            rank = self.rank,
+        )
+
         logging_dict = self.maybe_sample(logging_dict)
         logging_dict['epochs'] = epoch_num
         self.maybe_log(logging_dict)
@@ -206,6 +239,7 @@ class DiffusionTrainer:
         while self.step <= self.config.num_training_steps:
             self.do_epoch(epoch_num)
             epoch_num += 1
+      	self.def_save(name = 'final')
 
     @torch.no_grad()
     def definitely_sample(self, logging_dict, use_ema):
@@ -247,6 +281,20 @@ class DiffusionTrainer:
                 self.total_time = 0.
             self.barrier()
 
+
+    def def_save(self, name=None): 
+        if self.is_main():
+            saving.def_save(
+                network = self.network,
+                network_ema = self.network_ema,
+                optimizer = self.optimizer,
+                config = self.config,
+                step = self.step,
+                name = name,
+            )
+        self.barrier()
+
+        
 
     def apply_fn(self, xt, t, label, use_ema = False, is_train = False):
         network = self.network_ema if use_ema else self.network
