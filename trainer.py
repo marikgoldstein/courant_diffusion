@@ -129,11 +129,9 @@ class DiffusionTrainer:
             network = self.network,
             network_ema = self.network_ema,
             optimizer = self.optimizer,
-            process = self.process,
-            process_optimizer = self.process_optimizer,
             device = self.device
         )
-
+        
         # do not wipe ema from ckpt if restoring
         if restored:
             self.has_updated_ema = True
@@ -239,7 +237,7 @@ class DiffusionTrainer:
         while self.step <= self.config.num_training_steps:
             self.do_epoch(epoch_num)
             epoch_num += 1
-      	self.def_save(name = 'final')
+        self.def_save(name = 'final')
 
     @torch.no_grad()
     def definitely_sample(self, logging_dict, use_ema):

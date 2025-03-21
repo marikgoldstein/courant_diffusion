@@ -9,6 +9,8 @@ import numpy as np
 class Config:
     def __init__(self, args):
 
+        self.restore_ckpt_fname = args.restore_ckpt_fname
+
         CPU_TEST = False
 
         if CPU_TEST:
@@ -44,12 +46,13 @@ class Config:
         # saves a ckpt named something like model_last.pt. 
         # Can set this frequent since it keeps overwriting.
         self.save_last_every = 1000
-        self.sample_every = 1000 if LIGHTNING else self.freq
+        self.sample_every = 10_000 if LIGHTNING else self.freq
         self.sample_ema_every = self.sample_every
         # only bother to monitor EMA samples if not debuging
         self.sample_with_ema = not self.debug
         self.sample_with_ode = False if LIGHTNING else True
         self.warmup_steps = 100 if LIGHTNING else 20_000
+        self.num_training_steps = 10001 if LIGHTNING else 400_000
 
         self.sample_after = 1
         self.batch_size_sample = 128
@@ -96,8 +99,7 @@ class Config:
         self.adam_b2 = 0.99
         self.adam_eps = 1e-8
         
-        self.num_training_steps = 400_000
-
+       
         self.max_gpu_batch_size = 128
 
         if self.dataset == 'mnist':
@@ -130,7 +132,7 @@ class Config:
         self.unet_learned_sinusoidal_cond = True
         self.unet_random_fourier_features = False
 
-        self.wandb_entity = 'marikgoldstein'
+        self.wandb_entity = None #'marikgoldstein'
         self.wandb_project = 'courant_diffusion'
         self.resume_wandb_id = None
         self.wandb_name = str(self.dataset) + '_' + str(self.process_name) 

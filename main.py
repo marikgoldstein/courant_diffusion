@@ -70,6 +70,8 @@ if __name__ == '__main__':
     parser.add_argument('--process_name', type=str, choices=['linear_vp','rf', 'cosine'])
     parser.add_argument('--time_sampler', type=str, choices=['unif','logit_normal'], default='unif')
     parser.add_argument('--debug', type=int, default=0)
+    parser.add_argument('--restore_ckpt_fname', type=str, default = None)
+    parser.add_argument('--experiment_name', type = str, default = 'default_exp')
 
     # ask someone about these at some point
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
@@ -93,7 +95,8 @@ if __name__ == '__main__':
 
     # TODO add model saving 
 
-    base_ckpt_dir = './ckpts/'
+    base_ckpt_dir = f'./ckpts/{args.experiment_name}'
+
 
     if config.debug:
         base_ckpt_dir += '_debug'
@@ -103,7 +106,9 @@ if __name__ == '__main__':
     )
 
     config.ckpt_dir = ckpt_dir
-    
+
+    print("config checkpointing directory ('config.ckpt_dir') is set to", config.ckpt_dir)
+
     pth = pathlib.Path(ckpt_dir)
     
     pth.mkdir(parents=True, exist_ok=True)

@@ -26,11 +26,6 @@ def maybe_save(network, network_ema, optimizer, config, step, rank):
 
 def def_save(network, network_ema, optimizer, config, step, name = None):
 
-    if config.evaluate:
-        print("skipping save due to eval!")
-        return
-
-    	
     if config.use_ddp:
         net_state = network.module.state_dict()
     else:
