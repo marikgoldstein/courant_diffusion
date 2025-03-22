@@ -11,6 +11,34 @@ Main point of repo is to help Courant people start small projects.
 
 The code captures many small details / tips from collaborators (Valentin de Bortoli, Raghav Singhal, Michael Albergo, Nick Boffi, Jiaxin Shi, Will Grathwohl, Willis Ma, Saining Xie, etc)
 
+# the loss function
+
+This code supports velocity prediction, noise prediction, score prediction etc.... We distinguish between what your model outputs versus which squared error you compute. For example, you could output a noise prediction but compute a score loss, or output a velocity and compute a noise loss. Or just output a velocity and compute a velocity loss.
+```
+# This is whatever your model approximates
+model_out = apply_fn(xt, t, label)
+
+# This an object containing all possible prediction types
+model_obj = self.model_convert_fn(model_out, ...)
+
+# This is your estimate of the target (a conversion of whatever your model outputted)
+model_pred = getattr(model_obj, target_type)
+
+# object containing all possible targets
+target_fn = prediction.get_target_fn()
+target_obj = target_fn(t, xt, x0, x1, ...)
+
+# specific target for squared loss
+target = getattr(target_obj, target_type)
+
+# the squared error loss
+sq_err = utils.image_square_error(model_pred, target)
+```
+
+
+
+# Files and stuff
+
 Files:
 
 - **README.md**: 
