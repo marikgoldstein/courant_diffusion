@@ -50,7 +50,7 @@ class ProcessedBatch:
         # image label
         self.label = label
 
-class DiffusionTrainer:
+class BaseDiffusionTrainer:
 
     def __init__(self, config, rank, local_seed, device, train_loader, train_sampler, test_loader):
 
@@ -304,7 +304,24 @@ class DiffusionTrainer:
 
     def apply_fn_eval(self, xt, t, label, use_ema):
         return self.apply_fn(xt, t, label, use_ema=use_ema, is_train=False)
-    
+   
+    def prepare_batch_fn(self, batch):
+        raise NotImplementedError
+
+    def loss_fn(self, batch):
+        raise NotImplementedError
+
+
+class ExampleDiffusionTrainer(BaseDiffusionTrainer):
+
+    '''
+    If you'd like to repurpose this code, you'll likely want to write your own
+    - prepare batch function
+    - loss function
+    by subclassing BaseDiffusionTrainer with something like the ExampleDiffusionTrainer
+    as well as add a new dataset in data_utils.setup_data_train_and_test
+    '''
+
     def prepare_batch_fn(self, batch):
        
         config = self.config
@@ -367,9 +384,11 @@ class DiffusionTrainer:
         # get an object with all possible targets (score target, noise target, velocity target)
         target_fn = prediction.get_target_fn()
         target_obj = target_fn(t=t, xt=xt, x0=x0, x1=x1, coefs=coefs)
+        
+        # get the specific target for the loss you want to compute
         target = getattr(target_obj, self.config.target_type)
         
-        # the acutal squared loss
+        # the squared loss
         sq_err = utils.image_square_error(model_pred, target)
 
         assert sq_err.shape == (batch_size,)

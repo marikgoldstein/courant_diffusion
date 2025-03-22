@@ -113,13 +113,17 @@ if __name__ == '__main__':
     
     pth.mkdir(parents=True, exist_ok=True)
 
+
+    # if you want to repurpose this code, you will probably want to add a
+    # dataset to data_utils.setup_data_train_and_test
+
     train_loader, train_sampler, test_loader = setup_data_train_and_test(
         config = config,
         rank = rank,
         local_seed = local_seed,
     )
 
-    trainer = DiffusionTrainer(
+    trainer = ExampleDiffusionTrainer(
         config = config,
         rank = rank,
         local_seed = local_seed,

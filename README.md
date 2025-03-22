@@ -35,7 +35,15 @@ target = getattr(target_obj, target_type)
 sq_err = utils.image_square_error(model_pred, target)
 ```
 
+# Customizing this code
 
+Still experimenting with the design, but I think for now it's like this:
+- in the trainer file, there is a BaseDiffusionTrainer
+- this contains a prepare_batch_fn (which preproceses the batch) and a loss_fn (which computes the loss
+- the BaseDiffusionTrainer doesn't implement these, and it is sub-classed with an ExampleDiffusionTrainer that implements these
+- you can mostly edit the ExampleDiffusionTrainer to do your own data preprocessing and loss function computation
+- besides that you can add a new dataset in data_utils.setup_data_train_and_test
+- and add a new model architecture
 
 # Files and stuff
 
