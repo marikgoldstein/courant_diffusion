@@ -7,6 +7,7 @@ and makes the script default to logging and sampling fairly frequently. Under th
 
 Also note that this repo is best used with the wandb logging library. You will likely be asked for your account when running the script unless you are already logged in. On WANDB you will see the loss, grad norm, learning rate, model samples, etc... 
 
+
 # more info
 
 This is some code written by Mark. 
@@ -14,6 +15,13 @@ This is some code written by Mark.
 Main point of repo is to help Courant people start small projects.
 
 The code captures many small details / tips from collaborators (Valentin de Bortoli, Raghav Singhal, Michael Albergo, Nick Boffi, Jiaxin Shi, Will Grathwohl, Willis Ma, Saining Xie, etc)
+
+# Some exercises
+
+- Try switching out the uniform time sampler for the logit normal time sampler
+- Try switching the model type or target type
+- Try adding a dataset
+- Try adding a data augmentation
 
 # the loss function
 
