@@ -16,7 +16,7 @@ The code captures many small details / tips from collaborators (Valentin de Bort
 This code supports velocity prediction, noise prediction, score prediction etc.... We distinguish between what your model outputs versus which squared error you compute. For example, you could output a noise prediction but compute a score loss, or output a velocity and compute a noise loss. Or just output a velocity and compute a velocity loss.
 ```
 # This is whatever your model approximates
-model_out = apply_fn(xt, t, label)
+model_out = model_fn(xt, t, label)
 
 # This an object containing all possible prediction types
 model_obj = self.model_convert_fn(model_out, ...)
