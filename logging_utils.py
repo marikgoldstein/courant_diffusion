@@ -99,14 +99,15 @@ def plot_real_data_needs_blocking(config, batch, prepare_batch_fn):
 
     processed_batch = prepare_batch_fn(batch)
     x0 = processed_batch.x0
+    x0_aug = processed_batch.x0_aug
     x_discrete = processed_batch.x_discrete
-    
+
     if config.dataset in ['mnist']:
         gray = True
     else:
         gray = False
-    im = wandb_fn(x0, left=x_discrete, gray=gray)
-    Dplot = {'xdiscrete_x0' : im}
+    im = wandb_fn(x0, left=x_discrete, right=x0_aug, gray=gray)
+    Dplot = {'xdiscrete_x0_x0aug' : im}
     wandb.log(Dplot, step = 0)
 
 def setup_wandb_needs_blocking(config, ckpt_dir):

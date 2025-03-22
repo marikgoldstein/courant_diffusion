@@ -35,6 +35,10 @@ target = getattr(target_obj, target_type)
 sq_err = utils.image_square_error(model_pred, target)
 ```
 
+# Augmentation
+
+Note that we don't use the pytorch + torchvision data augmentation in the dataloader. We don't give the dataloader any augmentations and instead define an augmenter ourselves. The augmenter is defined in augmentations.py and used in the prepare batch function. Extend or replace this as needed, perhaps with the torchvision augmentations.
+
 # Customizing this code
 
 Still experimenting with the design, but I think for now it's like this:

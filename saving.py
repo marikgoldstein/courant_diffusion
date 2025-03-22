@@ -15,16 +15,16 @@ def maybe_save(network, network_ema, optimizer, config, step, rank):
 
     if step % c.save_every == 0:
         if rank == 0:
-            def_save(**save_args)
+            definitely_save(**save_args)
         if config.use_ddp:
             dist.barrier()
     if step % c.save_last_every == 0:
         if rank == 0:
-            def_save(**save_args, name = 'last')
+            definitely_save(**save_args, name = 'last')
         if config.use_ddp:
             dist.barrier()
 
-def def_save(network, network_ema, optimizer, config, step, name = None):
+def definitely_save(network, network_ema, optimizer, config, step, name = None):
 
     if config.use_ddp:
         net_state = network.module.state_dict()

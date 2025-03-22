@@ -33,10 +33,11 @@ import time_samplers
 import prediction
 import unet
 import saving
+import augmentations
 
 class ProcessedBatch:
 
-    def __init__(self, x_original, x_discrete, x0, label):
+    def __init__(self, x_original, x_discrete, x0, label, x_discrete_aug=None, x0_aug=None, augmentation_label=None):
         
         # image discrete in [0, 1] taking 256 values
         self.x_original = x_original
@@ -49,6 +50,12 @@ class ProcessedBatch:
 
         # image label
         self.label = label
+
+        # augmented stuff
+        self.x_discrete_aug = x_discrete_aug
+        self.x0_aug = x0_aug
+        self.augmentation_label = augmentation_label
+
 
 class BaseDiffusionTrainer:
 
@@ -67,13 +74,19 @@ class BaseDiffusionTrainer:
         self.setup_overfit()
         self.process = processes.get_process(config, device)
         self.setup_networks()
-        self.def_save(name = 'init')
+        self.definitely_save(name = 'init')
         print("---------------------")
         for k in vars(self.config):
             print(k, getattr(self.config, k))
         print("---------------------")
 
         self.train_time_sampler = time_samplers.get_train_time_sampler(config, device)
+
+
+        # for now, augmentations are handled manually rather than using torchvision and torch dataloader
+        # change as needed. This is turned on/off and config.py
+        self.augmenter = augmentations.get_augmenter(config)
+
 
         # This is a function that converts your model output to all possible prediction types
         self.model_convert_fn = prediction.get_model_out_to_pred_obj_fn(
@@ -138,7 +151,6 @@ class BaseDiffusionTrainer:
         else:
             self.has_updated_ema = False
 
-
         ema.requires_grad(self.network_ema, False)
         self.network_ema.eval()
 
@@ -166,7 +178,7 @@ class BaseDiffusionTrainer:
         config = self.config
         start_batch = time.time()
         logging_dict = {}
-        loss = self.loss_fn(batch) 
+        loss = self.loss_fn(batch, is_train = True) 
         logging_dict['train_loss'] = loss
         old_norm, old_lr, new_lr = optimizers.step_optimizer(
             self.network, 
@@ -237,10 +249,11 @@ class BaseDiffusionTrainer:
         while self.step <= self.config.num_training_steps:
             self.do_epoch(epoch_num)
             epoch_num += 1
-        self.def_save(name = 'final')
+        self.definitely_save(name = 'final')
 
     @torch.no_grad()
     def definitely_sample(self, logging_dict, use_ema):
+        # sample with SDE and ODE
         for ode in ([False, True]):
             logging_dict = sampling.sample(
                 apply_fn = self.apply_fn_eval,
@@ -280,9 +293,9 @@ class BaseDiffusionTrainer:
             self.barrier()
 
 
-    def def_save(self, name=None): 
+    def definitely_save(self, name=None): 
         if self.is_main():
-            saving.def_save(
+            saving.definitely_save(
                 network = self.network,
                 network_ema = self.network_ema,
                 optimizer = self.optimizer,
@@ -292,15 +305,13 @@ class BaseDiffusionTrainer:
             )
         self.barrier()
 
-        
-
     def apply_fn(self, xt, t, label, use_ema = False, is_train = False):
         network = self.network_ema if use_ema else self.network
         network.train() if is_train else network.eval()
         return network(xt, t, label)
 
     def apply_fn_train(self, xt, t, label):
-        return self.apply_fn(xt, t, label, use_ema = False, is_train = True)
+        return self.apply_fn(xt, t, label, use_ema = False, is_train=True)
 
     def apply_fn_eval(self, xt, t, label, use_ema):
         return self.apply_fn(xt, t, label, use_ema=use_ema, is_train=False)
@@ -339,20 +350,35 @@ class ExampleDiffusionTrainer(BaseDiffusionTrainer):
         # for images, move from [0,1] to [-1,1] , but still discrete
         x_discrete = utils.x01_to_centered(x_original)
 
+        # a different copy of x_discrete that has been augmented
+        # augmentation_label is true if any augmentation was applied and false otherwise
+        x_discrete_aug, augmentation_label = self.augmenter(x_discrete)
+
         # dequantization to make continuous
+        # this is basically optional but some say it's the proper way
+        # to apply a density model to discrete data
         x0 = torch.distributions.Normal(
             loc = x_discrete, 
             scale = config.gamma.type_as(x_discrete)
         ).sample()
 
+        # dequantized version of the augmented x_discete
+        x0_aug = torch.distributions.Normal(
+            loc = x_discrete_aug,
+            scale = config.gamma.type_as(x_discrete_aug)
+        ).sample()
+
         return ProcessedBatch(
             x_original = x_original,
             x_discrete = x_discrete,
+            x_discrete_aug = x_discrete_aug,
             x0 = x0,
+            x0_aug = x0_aug,
             label = label,
+            augmentation_label = augmentation_label,
         )
 
-    def loss_fn(self, batch):
+    def loss_fn(self, batch, is_train=False):
         '''
         This is just a squared error function
         but it looks complicated because it handles generic case
@@ -363,10 +389,22 @@ class ExampleDiffusionTrainer(BaseDiffusionTrainer):
         but gradients can be different for differnet parameterizations.
         '''
         processed_batch = self.prepare_batch_fn(batch)
-        batch_size = processed_batch.x0.shape[0]
+
+        # get augmented data during training, regular data otherwise.
+        # if you implement some evals, you probably want x0 and not x0_aug
+        if is_train:
+            x0 = processed_batch.x0_aug
+        else:
+            x0 = processed_batch.x0
+
+        batch_size = x0.shape[0]
         t = self.train_time_sampler(batch_size)
-        apply_fn = lambda xt, t, label: self.apply_fn_train(xt, t, label)
-        x0 = processed_batch.x0
+
+        if is_train:
+            apply_fn = lambda xt, t, label: self.apply_fn_train(xt, t, label)
+        else:
+            apply_fn = lambda xt, t, label: self.apply_fn_eval(xt, t, label, use_ema=False)
+        
         label = processed_batch.label
         coefs = self.process(t)
         x1 = self.process.sample_base(batch_size)

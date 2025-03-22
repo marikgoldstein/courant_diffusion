@@ -7,7 +7,7 @@ import torch.distributed as dist
 import argparse
 
 # local
-from trainer import DiffusionTrainer
+from trainer import ExampleDiffusionTrainer
 from data_utils import setup_data_train_and_test
 from config import Config
 

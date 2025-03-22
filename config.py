@@ -24,8 +24,29 @@ class Config:
             self.use_ddp = True
             self.cpu = False
 
+
+        # regularization / optimization
+        # note current example architecture has no dropout
+        self.grad_clip_norm = 1.0
+        self.weight_decay = 0.0
+        self.base_learning_rate = 2.0e-4 
+        self.min_learning_rate = 1e-6
+        self.lr_schedule = 'cosine'
+        self.adam_b1 = 0.9
+        self.adam_b2 = 0.99
+        self.adam_eps = 1e-8
+
+        # augmentation stuff
+        self.augmentation = True
+        self.horizontal_flip = True
+        self.rotate90 = False
+        self.augmentation_prob = .5 
+
+        # loss function stuff
         self.model_type = 'velocity'
         self.target_type = 'velocity'
+
+
         self.debug = bool(args.debug)
        
         # LIGHTNING just means run everything quickly
@@ -42,11 +63,11 @@ class Config:
 
         # saves a ckpt named at current step like model_step_2000.pt
         # can't set this too frequent since models take up a lot of space
-        self.save_every = 1000 if LIGHTNING else self.freq
+        self.save_every = 10_000 if LIGHTNING else self.freq
         # saves a ckpt named something like model_last.pt. 
         # Can set this frequent since it keeps overwriting.
         self.save_last_every = 1000
-        self.sample_every = 10_000 if LIGHTNING else self.freq
+        self.sample_every = 1_000 if LIGHTNING else self.freq
         self.sample_ema_every = self.sample_every
         # only bother to monitor EMA samples if not debuging
         self.sample_with_ema = not self.debug
@@ -90,15 +111,6 @@ class Config:
         self.update_ema_every = 1
         self.update_ema_after = 20000
 
-        self.grad_clip_norm = 1.0
-        self.weight_decay = 0.0
-        self.base_learning_rate = 2.0e-4 
-        self.min_learning_rate = 1e-6
-        self.lr_schedule = 'cosine'
-        self.adam_b1 = 0.9
-        self.adam_b2 = 0.99
-        self.adam_eps = 1e-8
-        
        
         self.max_gpu_batch_size = 128
 
