@@ -2,6 +2,10 @@
 # quick instructions
 To run this code, go to config.py, set the options you want, go to run.sh, set the options you want, and then call "sh run.sh". 
 
+NOTE: by default, debug mode is on (--debug 1 in run.sh). This makes the script default to overfitting on one batch of cifar data,
+and makes the script default to logging and sampling fairly frequently. Under the default settings of velocity matching, you should see the ODE and SDE samples both produce plausible CIFAR samples in about 1000-3000 steps.
+
+Also note that this repo is best used with the wandb logging library. You will likely be asked for your account when running the script unless you are already logged in. On WANDB you will see the loss, grad norm, learning rate, model samples, etc... 
 
 # more info
 
