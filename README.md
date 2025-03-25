@@ -14,7 +14,7 @@ This is some code written by Mark.
 
 Main point of repo is to help Courant people start small projects.
 
-The code captures many small details / tips from collaborators (Valentin de Bortoli, Raghav Singhal, Michael Albergo, Nick Boffi, Jiaxin Shi, Will Grathwohl, Willis Ma, Saining Xie, etc)
+The code captures many small details / tips from collaborators (Valentin de Bortoli, Alexandre Galashov, Raghav Singhal, Michael Albergo, Nick Boffi, Jiaxin Shi, Will Grathwohl, Willis Ma, Saining Xie, etc)
 
 # Some exercises
 
