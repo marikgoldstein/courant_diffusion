@@ -37,7 +37,16 @@ import augmentations
 
 class ProcessedBatch:
 
-    def __init__(self, x_original, x_discrete, x0, label, x_discrete_aug=None, x0_aug=None, augmentation_label=None):
+    def __init__(
+        self, 
+        x_original, 
+        x_discrete, 
+        x0, 
+        label, 
+        x_discrete_aug=None, 
+        x0_aug=None, 
+        augmentation_label=None
+    ):
         
         # image discrete in [0, 1] taking 256 values
         self.x_original = x_original
@@ -59,7 +68,16 @@ class ProcessedBatch:
 
 class BaseDiffusionTrainer:
 
-    def __init__(self, config, rank, local_seed, device, train_loader, train_sampler, test_loader):
+    def __init__(
+        self, 
+        config, 
+        rank, 
+        local_seed, 
+        device, 
+        train_loader, 
+        train_sampler, 
+        test_loader
+    ):
 
         # device and config stuff
         self.rank = rank
@@ -80,30 +98,47 @@ class BaseDiffusionTrainer:
             print(k, getattr(self.config, k))
         print("---------------------")
 
-        self.train_time_sampler = time_samplers.get_train_time_sampler(config, device)
+        # how to sample times t for training
+        self.train_time_sampler = time_samplers.get_train_time_sampler(
+            config, device
+        )
 
-
-        # for now, augmentations are handled manually rather than using torchvision and torch dataloader
+        # for now, augmentations are handled manually 
+        # rather than using torchvision and torch dataloader
         # change as needed. This is turned on/off and config.py
         self.augmenter = augmentations.get_augmenter(config)
 
-
-        # This is a function that converts your model output to all possible prediction types
+        # This is a function that converts your model output to 
+        # all possible prediction types
         self.model_convert_fn = prediction.get_model_out_to_pred_obj_fn(
             model_type = self.config.model_type
         )
 
         # setup logging and wandb
+        self.setup_wandb()
+
+        self.plot_real_data()
+
+        self.plot_lr_schedule()
+
+
+    def plot_lr_schedule(self,):
+        
         if self.is_main() and self.config.use_wandb:
-            logging_utils.setup_wandb_needs_blocking(
-                self.config, 
-                self.config.ckpt_dir
-            )
-            logging_utils.plot_real_data_needs_blocking(
-                config = self.config, 
-                batch = self.overfit_batch,
-                prepare_batch_fn = self.prepare_batch_fn, 
-            )
+            print("Plotting LR")
+            plt.clf()
+            fig = plt.figure()
+            # plot only ever 10 steps
+            steps = torch.arange(0, self.config.num_training_steps, 100)
+            lrs = []
+            for step in steps:
+                lrs.append(round(self.optimizer.get_lr(step).item(), 8))
+            plt.plot(steps, lrs, label='learning_rate')
+            plt.xlabel('step')
+            plt.ylabel('lr')
+            plt.legend()
+            wandb.log({'learning_rate': fig}, step=0)
+            print("Done plotting LR")
         self.barrier()
 
     def is_main(self,):
@@ -116,6 +151,24 @@ class BaseDiffusionTrainer:
             return
         dist.barrier()
 
+    def setup_wandb(self,):
+        if self.is_main() and self.config.use_wandb:
+            logging_utils.setup_wandb_needs_blocking(
+                self.config, 
+                self.config.ckpt_dir
+            )
+        self.barrier()
+
+    def plot_real_data(self,):
+        if self.is_main() and self.config.use_wandb:
+            logging_utils.plot_real_data_needs_blocking(
+                config = self.config, 
+                batch = self.overfit_batch,
+                prepare_batch_fn = self.prepare_batch_fn, 
+            )
+        self.barrier()
+
+
     def setup_overfit(self,):
         '''
         save one batch to be a special overfitting batch for debugging
@@ -123,6 +176,25 @@ class BaseDiffusionTrainer:
         x, label = next(iter(self.train_loader))
         x, label = x.to(self.device), label.to(self.device)
         self.overfit_batch = (x, label)
+
+    def setup_optimizer(self,):
+        '''
+        Optimizer object is a wrapper around torch.optim.AdamW
+        It also handles LR scheduling, grad clipping, etc...
+        '''
+        self.optimizer = optimizers.Optimizer(
+            network = self.network,
+            grad_clip_norm = self.config.grad_clip_norm,
+            weight_decay = self.config.weight_decay,
+            base_lr = self.config.base_lr,
+            min_lr = self.config.min_lr,
+            warmup_steps = self.config.warmup_steps,
+            lr_schedule_type = self.config.lr_schedule_type,
+            num_training_steps = self.config.num_training_steps,
+            adam_b1 = self.config.adam_b1,
+            adam_b2 = self.config.adam_b2,
+            adam_eps = self.config.adam_eps,
+        )
 
     def setup_networks(self,):
         '''
@@ -132,18 +204,11 @@ class BaseDiffusionTrainer:
         
         self.network = unet.get_unet_from_config(config)
         self.network_ema = deepcopy(self.network)
-
-        self.optimizer = optimizers.setup_optimizer(self.network, config)
+        self.setup_optimizer()
 
         self.step = 0
         
-        restored = saving.maybe_restore(
-            config = config,
-            network = self.network,
-            network_ema = self.network_ema,
-            optimizer = self.optimizer,
-            device = self.device
-        )
+        restored = self.maybe_restore()
         
         # do not wipe ema from ckpt if restoring
         if restored:
@@ -171,6 +236,25 @@ class BaseDiffusionTrainer:
         # set ema to initialize as model
         ema.wipe_ema(net, self.network_ema)
 
+    def maybe_update_emas(self,):
+        '''
+        If first update of EMA, sets EMA to equal the current model
+        else, does an exponential moving average update
+        '''
+        updated_ema = ema.maybe_update_emas(
+            network = self.network, 
+            network_ema = self.network_ema, 
+            use_ddp = self.config.use_ddp,
+            ema_decay = self.config.ema_decay,
+            update_ema_every = self.config.update_ema_every,
+            update_ema_after = self.config.update_ema_after,
+            step = self.step,
+            first_update = not self.has_updated_ema,
+        )
+
+        if updated_ema and (not self.has_updated_ema):
+            self.has_updated_ema = True
+
     def do_step(self, batch, epoch_num):
         '''
         Taking one training step + any optional period logging
@@ -179,47 +263,42 @@ class BaseDiffusionTrainer:
         start_batch = time.time()
         logging_dict = {}
         loss = self.loss_fn(batch, is_train = True) 
-        logging_dict['train_loss'] = loss
-        old_norm, old_lr, new_lr = optimizers.step_optimizer(
-            self.network, 
-            self.optimizer, 
-            logging_dict['train_loss'], 
-            config, 
-            self.step
+        old_norm, old_lr, new_lr = self.optimizer.take_step(
+            loss, self.step
         )
         end_batch = time.time()
-        logging_dict['train_loss'] = logging_dict['train_loss'].item()
+        logging_dict['train_loss'] = loss.item()
         logging_dict['grad_norm_before_clip'] = old_norm.item()
-
         self.total_time += (end_batch - start_batch)
         self.log_steps += 1
-       
-        
-        # if first update of EMA, sets EMA to equal the current model
-        # else, does an exponential moving average update
-        updated_ema = ema.maybe_update_emas(
-            self.network, 
-            self.network_ema, 
-            config, 
-            self.step, 
-            first_update = not self.has_updated_ema
-        )
-        if updated_ema and (not self.has_updated_ema):
-            self.has_updated_ema = True
-    
-        saving.maybe_save(
-            network = self.network,
-            network_ema = self.network_ema,
-            optimizer = self.optimizer,
-            config = config,
-            step = self.step,
-            rank = self.rank,
-        )
-
+        updated_ema = self.maybe_update_emas()
+        self.maybe_save()
         logging_dict = self.maybe_sample(logging_dict)
         logging_dict['epochs'] = epoch_num
         self.maybe_log(logging_dict)
         self.step += 1
+
+    def maybe_sample(self, logging_dict, label=None):
+        return sampling.maybe_sample(
+            step = self.step,
+            rank = self.rank,
+            sample_every = self.config.sample_every,
+            sample_ema_every = self.config.sample_ema_every,
+            sample_after = self.config.sample_after,
+            apply_fn = self.apply_fn_eval,
+            batch_size_sample = self.config.batch_size_sample,
+            dataset = self.config.dataset,
+            num_classes = self.config.num_classes,
+            EM_sample_steps = self.config.EM_sample_steps,
+            model_type = self.config.model_type,
+            T_min_sampling = self.config.T_min_sampling,
+            T_max_sampling = self.config.T_max_sampling,
+            process = self.process,
+            loader = self.train_loader,
+            device = self.device,
+            logging_dict = logging_dict,
+            label = label,
+        )
 
     def do_epoch(self, epoch_num):
         '''
@@ -250,60 +329,57 @@ class BaseDiffusionTrainer:
             self.do_epoch(epoch_num)
             epoch_num += 1
         self.definitely_save(name = 'final')
-
-    @torch.no_grad()
-    def definitely_sample(self, logging_dict, use_ema):
-        # sample with SDE and ODE
-        for ode in ([False, True]):
-            logging_dict = sampling.sample(
-                apply_fn = self.apply_fn_eval,
-                config = self.config,
-                process = self.process,
-                use_ema = use_ema,
-                loader = self.train_loader, 
-                device = self.device, 
-                ode = ode,
-                logging_dict = logging_dict,
-            )
-        return logging_dict
-
-    def maybe_sample(self, logging_dict = None):
-
-        config = self.config
-        if logging_dict is None:
-            logging_dict = {}
-        
-        for use_ema in [False, True]:
-            timer = config.sample_ema_every if use_ema else config.sample_every
-            if self.step % timer == 0 and self.step >= config.sample_after:
-                if self.is_main():
-                    logging_dict = self.definitely_sample(logging_dict, use_ema)
-                self.barrier()
-            return logging_dict
  
     def maybe_log(self, logD):
         if self.step % self.config.log_every == 0:
             if self.is_main():
                 logD['steps_per_sec'] = round(self.log_steps / self.total_time, 3)
-                for i, pgroup in enumerate(self.optimizer.param_groups):
+                for i, pgroup in enumerate(self.optimizer.param_groups()):
                     logD[f'lr_{i}'] = pgroup['lr']
-                logging_utils.definitely_log(logD, self.step, use_wandb = self.config.use_wandb)
+                logging_utils.definitely_log(
+                    logD, self.step, use_wandb = self.config.use_wandb
+                )
                 self.log_steps = 0
                 self.total_time = 0.
             self.barrier()
 
+    def maybe_save(self,):
+        # locks inside to avoid needless locking
+        saving.maybe_save(
+            ckpt_dir = self.config.ckpt_dir,
+            save_every = self.config.save_every,
+            save_last_every = self.config.save_last_every,
+            use_ddp = self.config.use_ddp,
+            network = self.network,
+            network_ema = self.network_ema,
+            optimizer = self.optimizer,
+            step = self.step,
+            rank = self.rank,
+        )
 
     def definitely_save(self, name=None): 
         if self.is_main():
             saving.definitely_save(
+                ckpt_dir = self.config.ckpt_dir,
+                use_ddp = self.config.use_ddp,
                 network = self.network,
                 network_ema = self.network_ema,
                 optimizer = self.optimizer,
-                config = self.config,
                 step = self.step,
                 name = name,
             )
         self.barrier()
+
+    def maybe_restore(self,):
+        restored = saving.maybe_restore(
+            restore_ckpt_fname = self.config.restore_ckpt_fname,
+            network = self.network,
+            network_ema = self.network_ema,
+            optimizer = self.optimizer,
+            device = self.device
+        )
+        return restored
+
 
     def apply_fn(self, xt, t, label, use_ema = False, is_train = False):
         network = self.network_ema if use_ema else self.network
@@ -333,6 +409,13 @@ class ExampleDiffusionTrainer(BaseDiffusionTrainer):
     as well as add a new dataset in data_utils.setup_data_train_and_test
     '''
 
+    def dequantize(self, x_discrete):
+        x0 = torch.distributions.Normal(
+            loc = x_discrete, 
+            scale = self.config.gamma.type_as(x_discrete)
+        ).sample()
+        return x0
+
     def prepare_batch_fn(self, batch):
        
         config = self.config
@@ -357,16 +440,10 @@ class ExampleDiffusionTrainer(BaseDiffusionTrainer):
         # dequantization to make continuous
         # this is basically optional but some say it's the proper way
         # to apply a density model to discrete data
-        x0 = torch.distributions.Normal(
-            loc = x_discrete, 
-            scale = config.gamma.type_as(x_discrete)
-        ).sample()
+        x0 = self.dequantize(x_discrete)
 
         # dequantized version of the augmented x_discete
-        x0_aug = torch.distributions.Normal(
-            loc = x_discrete_aug,
-            scale = config.gamma.type_as(x_discrete_aug)
-        ).sample()
+        x0_aug = self.dequantize(x_discrete_aug)
 
         return ProcessedBatch(
             x_original = x_original,
@@ -392,10 +469,7 @@ class ExampleDiffusionTrainer(BaseDiffusionTrainer):
 
         # get augmented data during training, regular data otherwise.
         # if you implement some evals, you probably want x0 and not x0_aug
-        if is_train:
-            x0 = processed_batch.x0_aug
-        else:
-            x0 = processed_batch.x0
+        x0 = processed_batch.x0_aug if is_train else processed_batch.x0
 
         batch_size = x0.shape[0]
         t = self.train_time_sampler(batch_size)

@@ -87,23 +87,10 @@ if __name__ == '__main__':
     # DEVICE DDP STUFF
     config, rank, local_seed, device = setup_device(config)
 
-    # CKPT DIR
-    jobname = f'courant_test'
-
-    if config.cpu:
-        args.base_ckpt_dir = '~/'
-
-    # TODO add model saving 
-
-    base_ckpt_dir = f'./ckpts/{args.experiment_name}'
-
+    ckpt_dir = f'./ckpts/{args.experiment_name}'
 
     if config.debug:
-        base_ckpt_dir += '_debug'
-
-    ckpt_dir = os.path.join(
-        base_ckpt_dir, jobname
-    )
+        ckpt_dir += '_debug'
 
     config.ckpt_dir = ckpt_dir
 

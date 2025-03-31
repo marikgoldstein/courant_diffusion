@@ -12,6 +12,7 @@ import torch.nn as nn
 import time
 import wandb
 import random
+import torch.distributed as dist
 
 from torchdiffeq import odeint #odeint_adjoint as odeint
 
@@ -26,16 +27,76 @@ def bad(x):
 def elementwise(a, x):
     return utils.bcast_right(a, x.ndim).type_as(x) * x
 
+
+def maybe_sample(
+    step,
+    rank,
+    sample_every,
+    sample_ema_every,
+    sample_after,
+    apply_fn,
+    batch_size_sample,
+    dataset,
+    num_classes,
+    EM_sample_steps,
+    model_type,
+    T_min_sampling,
+    T_max_sampling,
+    process,
+    device,
+    loader = None,
+    logging_dict = None,
+    label = None,
+):
+
+    if logging_dict is None:
+        logging_dict = {}
+    
+    for use_ema in [False, True]:
+        sample_every = sample_ema_every if use_ema else sample_every
+        cond1 = step % sample_every == 0
+        cond2 = step >= sample_after
+        if cond1 and cond2:
+            if rank == 0:
+                for ode in [False, True]:
+                    logging_dict = sample(
+                        apply_fn = apply_fn,
+                        batch_size_sample = batch_size_sample,
+                        dataset = dataset,
+                        num_classes = num_classes,
+                        EM_sample_steps = EM_sample_steps,
+                        model_type = model_type,
+                        T_min_sampling = T_min_sampling,
+                        T_max_sampling = T_max_sampling,
+                        process = process,
+                        use_ema = use_ema,
+                        loader = loader,
+                        device = device,
+                        ode = ode,
+                        logging_dict = logging_dict,
+                        label = label,
+                    )
+            dist.barrier()
+        return logging_dict
+
+
 @torch.no_grad()
 def sample(
     apply_fn,
-    config, 
+    batch_size_sample,
+    dataset,
+    num_classes,
+    EM_sample_steps,
+    model_type,
+    ode,
+    T_min_sampling,
+    T_max_sampling,
     process, 
     use_ema,
-    loader = None, 
-    device = None, 
-    logging_dict = None,
-    ode = False,
+    device,
+    loader=None, 
+    logging_dict=None,
+    label=None,
 ):
     
     print("doing sampling with ode == ", ode)
@@ -43,16 +104,24 @@ def sample(
     if logging_dict is None:
         logging_dict = {}
 
-    N = config.batch_size_sample
+    N = batch_size_sample
 
-    label = torch.randint(0, config.num_classes, (N,)).to(device)
+    if label is None:
+        print("using random labels for sampling")
+        label = torch.randint(0, num_classes, (N,))
+    else:
+        print("using pre-specified labels for sampling")
+
+    label = label.to(device)
     x1 = process.sample_base(N).to(device)
-
     apply_fn_curried = lambda xt, t: apply_fn(xt, t, label, use_ema = use_ema)
 
     samp = EM(
         apply_fn = apply_fn_curried,
-        config = config,
+        EM_sample_steps = EM_sample_steps,
+        model_type = model_type,
+        T_min_sampling = T_min_sampling,
+        T_max_sampling = T_max_sampling,
         process = process,
         base = x1,
         ode = ode,
@@ -60,16 +129,40 @@ def sample(
 
     key = 'base_sample'
     key += ('_ode' if ode else '_sde')
-    key += ('_ema' if use_ema else '')
+    key += ('_ema' if use_ema else '_nonema')
     logging_dict[key] = wandb_fn(
         samp, 
         left = x1,
-        gray = (config.dataset == 'mnist')
+        gray = (dataset == 'mnist')
     )
     return logging_dict
 
+@torch.no_grad()
+def EM(apply_fn, EM_sample_steps, model_type, T_min_sampling, T_max_sampling, process, base, ode=False):   
+    steps = EM_sample_steps
+    print(f"Using {steps} EM steps")
+    # because times are reversed in the func
+    tmin = 1. - T_max_sampling
+    tmax = 1. - T_min_sampling
 
-def get_ode_step_fn(config, process, apply_fn, step_size):
+    print("sampling tmin and tmax is", tmin, tmax)
+
+    ts = torch.linspace(tmin, tmax, steps).type_as(base)
+    step_size = ts[1] - ts[0]
+    xt = base
+    ones = torch.ones(base.shape[0]).type_as(xt)
+
+    if ode:
+        step_fn = get_ode_step_fn(model_type, process, apply_fn, step_size)
+    else:
+        step_fn = get_sde_step_fn(model_type, process, apply_fn, step_size)
+
+    for i, tscalar in enumerate(ts):
+        xt, mu = step_fn(xt, tscalar * ones)
+    return mu
+
+
+def get_ode_step_fn(model_type, process, apply_fn, step_size):
 
     '''
     x1 is base distribution, want to sample x0
@@ -77,7 +170,7 @@ def get_ode_step_fn(config, process, apply_fn, step_size):
     this is the same as integrating dx = -v(x,1-t)dt in forward time
     (note both negation and 1-t)
     '''
-    model_convert_fn = prediction.get_model_out_to_pred_obj_fn(model_type = config.model_type)
+    model_convert_fn = prediction.get_model_out_to_pred_obj_fn(model_type = model_type)
 
     dt = step_size
 
@@ -94,7 +187,7 @@ def get_ode_step_fn(config, process, apply_fn, step_size):
     
     return step_fn
 
-def get_sde_step_fn(config, process, apply_fn, step_size):
+def get_sde_step_fn(model_type, process, apply_fn, step_size):
 
     '''
     here we integrate the SDE going from x1 to x0
@@ -137,7 +230,7 @@ def get_sde_step_fn(config, process, apply_fn, step_size):
 
     '''
 
-    model_convert_fn = prediction.get_model_out_to_pred_obj_fn(model_type = config.model_type)
+    model_convert_fn = prediction.get_model_out_to_pred_obj_fn(model_type = model_type)
     
     dt = step_size
 
@@ -163,27 +256,4 @@ def get_sde_step_fn(config, process, apply_fn, step_size):
 
     return step_fn
 
-@torch.no_grad()
-def EM(apply_fn, config, process, base, ode=False):   
-    steps = config.EM_sample_steps
-    print(f"Using {steps} EM steps")
-    # because times are reversed in the func
-    tmin = 1. - config.T_max_sampling
-    tmax = 1. - config.T_min_sampling
-
-    print("sampling tmin and tmax is", tmin, tmax)
-
-    ts = torch.linspace(tmin, tmax, steps).type_as(base)
-    step_size = ts[1] - ts[0]
-    xt = base
-    ones = torch.ones(base.shape[0]).type_as(xt)
-
-    if ode:
-        step_fn = get_ode_step_fn(config, process, apply_fn, step_size)
-    else:
-        step_fn = get_sde_step_fn(config, process, apply_fn, step_size)
-
-    for i, tscalar in enumerate(ts):
-        xt, mu = step_fn(xt, tscalar * ones)
-    return mu
 

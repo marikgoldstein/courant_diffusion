@@ -24,14 +24,13 @@ class Config:
             self.use_ddp = True
             self.cpu = False
 
-
         # regularization / optimization
         # note current example architecture has no dropout
         self.grad_clip_norm = 1.0
         self.weight_decay = 0.0
-        self.base_learning_rate = 2.0e-4 
-        self.min_learning_rate = 1e-6
-        self.lr_schedule = 'cosine'
+        self.base_lr = 2.0e-4 
+        self.min_lr = 1e-6
+        self.lr_schedule_type = 'cosine'
         self.adam_b1 = 0.9
         self.adam_b2 = 0.99
         self.adam_eps = 1e-8
@@ -72,7 +71,7 @@ class Config:
         # only bother to monitor EMA samples if not debuging
         self.sample_with_ema = not self.debug
         self.sample_with_ode = False if LIGHTNING else True
-        self.warmup_steps = 100 if LIGHTNING else 20_000
+        self.warmup_steps = 10 if LIGHTNING else 20_000
         self.num_training_steps = 10001 if LIGHTNING else 400_000
 
         self.sample_after = 1

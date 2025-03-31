@@ -30,10 +30,10 @@ def wipe_ema(model, model_ema):
         decay = 0.0,
     )
 
-def maybe_update_emas(network, network_ema, config, step, first_update):
-    c = config
-    cond1 = (step >= c.update_ema_after)
-    cond2 = (step % c.update_ema_every == 0)
+def maybe_update_emas(network, network_ema, use_ddp, ema_decay, update_ema_every, update_ema_after, step, first_update):
+    
+    cond1 = (step >= update_ema_after)
+    cond2 = (step % update_ema_every == 0)
 
     updated = False
 
@@ -42,10 +42,12 @@ def maybe_update_emas(network, network_ema, config, step, first_update):
         if first_update:
             print("ASSUMING THIS IS FIRST UPDATE OF EMA MODEL. DOING A FULL COPY")
 
+        network = network.module if use_ddp else network
+
         update_ema(
-            model = network.module,
+            model = network,
             model_ema = network_ema,
-            decay = 0.0 if first_update else c.ema_decay
+            decay = 0.0 if first_update else ema_decay
         )
 
         updated = True
