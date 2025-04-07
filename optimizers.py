@@ -37,7 +37,7 @@ class Optimizer:
         self.weight_decay = weight_decay
         self.base_lr = base_lr
         self.min_lr = min_lr
-        self.warmup_steps = warmup_steps
+        self.warmup_steps = warmup_steps if warmup_steps >= 1 else 1
         self.lr_schedule_type = lr_schedule_type
         self.num_training_steps = num_training_steps
 
@@ -100,9 +100,13 @@ class Optimizer:
             lr = self.base_lr
 
         # just in case warmup is 0, this sets warmup_coef to 1.0
-        warmup_coef = min(1.0, current_step / min(self.warmup_steps, 1))
+
+        if current_step >= self.warmup_steps:
+            warmup_coef = 1.0
+        else:
+            warmup_coef = current_step / self.warmup_steps
+
         new_lr = warmup_coef * lr 
 
-        # clip at min
         return new_lr.clamp(min=self.min_lr)
 
